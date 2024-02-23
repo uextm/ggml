@@ -26,6 +26,15 @@ if (NOT UNAME_M)
 endif()
 #message(STATUS "UNAME_S: ${UNAME_S}  UNAME_P: ${UNAME_P}  UNAME_M: ${UNAME_M}")
 
+# this version of Apple ld64 is buggy
+execute_process(
+    COMMAND ${CMAKE_C_COMPILER} ${CMAKE_EXE_LINKER_FLAGS} -Wl,-v
+    ERROR_VARIABLE output
+)
+if (output MATCHES "dyld-1015\.7")
+    add_compile_definitions(HAVE_BUGGY_APPLE_LINKER)
+endif()
+
 # Mac OS + Arm can report x86_64
 # ref: https://github.com/ggerganov/whisper.cpp/issues/66#issuecomment-1282546789
 if (UNAME_S MATCHES "Darwin")
@@ -137,7 +146,7 @@ if (APPLE AND NOT GGML_NO_ACCELERATE)
         message(STATUS "Accelerate framework found")
 
         set(GGML_EXTRA_LIBS  ${GGML_EXTRA_LIBS}  ${ACCELERATE_FRAMEWORK})
-        set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_ACCELERATE)
+        set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_ACCELERATE -DACCELERATE_NEW_LAPACK -DACCELERATE_LAPACK_ILP64)
     else()
         message(WARNING "Accelerate framework not found")
     endif()
@@ -162,32 +171,35 @@ if (GGML_OPENBLAS)
 
         set(GGML_EXTRA_LIBS  ${GGML_EXTRA_LIBS}  ${OPENBLAS_LIB})
         set(GGML_EXTRA_INCS  ${GGML_EXTRA_INCS}  ${OPENBLAS_INC})
-	set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_OPENBLAS)
+        set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_OPENBLAS)
     else()
         message(WARNING "OpenBLAS not found")
     endif()
 endif()
 
 if (GGML_CLBLAST)
-	set(CLBLAST_INCLUDE_SEARCH_PATHS
-        /usr/include
-        /usr/local/include
-	    $ENV{CLBLAST_HOME}
-	    $ENV{CLBLAST_HOME}/include
-        )
-	find_path(CLBLAST_INC NAMES clblast.h PATHS ${CLBLAST_INCLUDE_SEARCH_PATHS})
-	find_library(CLBLAST_LIB NAMES clblast)
-	find_library(OPENCL_LIB NAMES OpenCL)
-	if (CLBLAST_LIB AND OPENCL_LIB AND CLBLAST_INC)
-		message(STATUS "clBLAST found")
+    if(NOT CLBLAST_HOME)
+        set(CLBLAST_HOME
+            /usr
+            /usr/local
+            $ENV{CLBLAST_HOME}
+            )
+    endif()
 
-		set(GGML_EXTRA_INCS  ${GGML_EXTRA_INCS}  ${CLBLAST_INC})
-		set(GGML_EXTRA_LIBS  ${GGML_EXTRA_LIBS}  ${CLBLAST_LIB}  ${OPENCL_LIB})
-		set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_CLBLAST)
+    find_path(CLBLAST_INC NAMES clblast.h PATHS ${CLBLAST_HOME} PATH_SUFFIXES include)
+    find_library(CLBLAST_LIB NAMES clblast PATHS ${CLBLAST_HOME} PATH_SUFFIXES build)
+    find_path(OPENCL_INC NAMES CL/opencl.h PATHS ${OPENCL_ROOT})
+    find_library(OPENCL_LIB NAMES OpenCL)
+    if (CLBLAST_LIB AND OPENCL_LIB AND CLBLAST_INC AND OPENCL_INC)
+        message(STATUS "clBLAST found")
 
-		set(GGML_OPENCL_SOURCES ggml-opencl.cpp ggml-opencl.h)
+        set(GGML_EXTRA_INCS  ${GGML_EXTRA_INCS}  ${CLBLAST_INC} ${OPENCL_INC})
+        set(GGML_EXTRA_LIBS  ${GGML_EXTRA_LIBS}  ${CLBLAST_LIB} ${OPENCL_LIB})
+        set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_CLBLAST)
 
-		link_libraries("-Wl,--copy-dt-needed-entries")
+        set(GGML_OPENCL_SOURCES ggml-opencl.cpp ggml-opencl.h)
+
+        link_libraries("-Wl,--copy-dt-needed-entries")
     else()
         message(WARNING "clBLAST not found")
     endif()
@@ -204,19 +216,81 @@ if (GGML_CUBLAS)
 
         set(GGML_CUDA_SOURCES ggml-cuda.cu ggml-cuda.h)
 
-        add_compile_definitions(GGML_USE_CUBLAS)
+        set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_CUBLAS)
+
+        if (GGML_CUDA_FORCE_DMMV)
+            add_compile_definitions(GGML_CUDA_FORCE_DMMV)
+        endif()
+        if (GGML_CUDA_FORCE_MMQ)
+            add_compile_definitions(GGML_CUDA_FORCE_MMQ)
+        endif()
+
+        # required for dynamic parallelism
+        # set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 
         if (GGML_STATIC)
-            set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+            if (WIN32)
+                # As of 12.3.1 CUDA Tookit for Windows does not offer a static cublas library
+                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas CUDA::cublasLt)
+            else ()
+                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+            endif()
         else()
             set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart CUDA::cublas CUDA::cublasLt)
         endif()
+
+        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cuda_driver)
 
         if (CMAKE_BUILD_TYPE MATCHES Debug)
             set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -lineinfo")
         endif()
     else()
         message(WARNING "cuBLAS not found")
+    endif()
+endif()
+
+if (GGML_HIPBLAS)
+    list(APPEND CMAKE_PREFIX_PATH /opt/rocm)
+
+    if (NOT ${CMAKE_C_COMPILER_ID} MATCHES "Clang")
+        message(WARNING "Only LLVM is supported for HIP, hint: CC=/opt/rocm/llvm/bin/clang")
+    endif()
+    if (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
+        message(WARNING "Only LLVM is supported for HIP, hint: CXX=/opt/rocm/llvm/bin/clang++")
+    endif()
+
+    find_package(hip)
+    find_package(hipblas)
+    find_package(rocblas)
+
+    if (${hipblas_FOUND} AND ${hip_FOUND})
+        message(STATUS "HIP and hipBLAS found")
+
+        add_compile_definitions(GGML_USE_HIPBLAS GGML_USE_CUBLAS)
+
+        add_library(ggml-rocm OBJECT ggml-cuda.cu ggml-cuda.h)
+        if (BUILD_SHARED_LIBS)
+            set_target_properties(ggml-rocm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        endif()
+        if (GGML_CUDA_FORCE_DMMV)
+            target_compile_definitions(ggml-rocm PRIVATE GGML_CUDA_FORCE_DMMV)
+        endif()
+        if (GGML_CUDA_FORCE_MMQ)
+            target_compile_definitions(ggml-rocm PRIVATE GGML_CUDA_FORCE_MMQ)
+        endif()
+        target_compile_definitions(ggml-rocm PRIVATE GGML_CUDA_DMMV_X=${GGML_CUDA_DMMV_X})
+        target_compile_definitions(ggml-rocm PRIVATE GGML_CUDA_MMV_Y=${GGML_CUDA_MMV_Y})
+        target_compile_definitions(ggml-rocm PRIVATE K_QUANTS_PER_ITERATION=${GGML_CUDA_KQUANTS_ITER})
+        set_source_files_properties(ggml-cuda.cu PROPERTIES LANGUAGE CXX)
+        target_link_libraries(ggml-rocm PRIVATE hip::device PUBLIC hip::host roc::rocblas roc::hipblas)
+        target_include_directories(ggml-rocm PRIVATE . ../include ../include/ggml)
+
+        if (GGML_STATIC)
+            message(FATAL_ERROR "Static linking not supported for HIP/ROCm")
+        endif()
+        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} ggml-rocm)
+    else()
+        message(WARNING "hipBLAS or HIP not found. Try setting CMAKE_PREFIX_PATH=/opt/rocm")
     endif()
 endif()
 
@@ -228,7 +302,8 @@ if (GGML_METAL)
 
     set(GGML_METAL_SOURCES ggml-metal.m ggml-metal.h)
 
-    add_compile_definitions(GGML_USE_METAL)
+    set(GGML_EXTRA_FLAGS ${GGML_EXTRA_FLAGS} -DGGML_USE_METAL)
+
     #add_compile_definitions(GGML_METAL_NDEBUG)
 
     # get full path to the file
@@ -253,6 +328,9 @@ add_library(${TARGET}
     ggml.c
     ggml-alloc.c
     ggml-backend.c
+    ggml-quants.c
+    ggml-impl.h
+    ggml-backend-impl.h
     ../include/ggml/ggml.h
     ../include/ggml/ggml-alloc.h
     ../include/ggml/ggml-backend.h
@@ -268,11 +346,12 @@ target_include_directories(${TARGET} PUBLIC
     ${GGML_EXTRA_INCS}
     )
 
-if (MSVC)
-    target_link_libraries(${TARGET} PUBLIC ${GGML_EXTRA_LIBS} ${CMAKE_THREAD_LIBS_INIT})
-else()
-    target_link_libraries(${TARGET} PUBLIC m ${GGML_EXTRA_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+find_library(MATH_LIBRARY m)
+if (MATH_LIBRARY)
+    target_link_libraries(${TARGET} PUBLIC ${MATH_LIBRARY})
 endif()
+
+target_link_libraries(${TARGET} PUBLIC ${GGML_EXTRA_LIBS} ${CMAKE_THREAD_LIBS_INIT})
 
 if (BUILD_SHARED_LIBS)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
@@ -305,8 +384,16 @@ if (MINGW)
 endif()
 
 if (GGML_CUDA_SOURCES)
-    message(STATUS "GGML CUDA sources found, configuring CUDA architecture")
-    set_property(TARGET ggml  PROPERTY CUDA_ARCHITECTURES "52;61;70")
+    message(STATUS "GGML CUDA sources found")
+    if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        # Only configure gmml CUDA architectures is not globally set
+        if (NOT DEFINED GGML_CUDA_ARCHITECTURES)
+            # Not overriden by user, so set defaults
+            set(GGML_CUDA_ARCHITECTURES 52 61 70)
+        endif()
+        message(STATUS "GGML Configuring CUDA architectures ${GGML_CUDA_ARCHITECTURES}")
+        set_property(TARGET ggml  PROPERTY CUDA_ARCHITECTURES ${GGML_CUDA_ARCHITECTURES})
+    endif()
     set_property(TARGET ggml  PROPERTY CUDA_SELECT_NVCC_ARCH_FLAGS "Auto")
     if (NOT MSVC)
         target_link_libraries(ggml PUBLIC stdc++)
@@ -315,12 +402,13 @@ endif()
 
 set (GGML_PUBLIC_HEADERS
      ${CMAKE_CURRENT_SOURCE_DIR}/../include/ggml/ggml.h
-     ${CMAKE_CURRENT_SOURCE_DIR}/../include/ggml/ggml-alloc.h)
+     ${CMAKE_CURRENT_SOURCE_DIR}/../include/ggml/ggml-alloc.h
+     ${CMAKE_CURRENT_SOURCE_DIR}/../include/ggml/ggml-backend.h)
+
 set_target_properties(${TARGET} PROPERTIES
                       PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 
 install(TARGETS ${TARGET}
     LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib/static
     PUBLIC_HEADER DESTINATION include/ggml
     )

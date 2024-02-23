@@ -30,6 +30,16 @@ sd=`dirname $0`
 cd $sd/../
 SRC=`pwd`
 
+CMAKE_EXTRA=""
+
+if [ ! -z ${GG_BUILD_CUDA} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUBLAS=ON"
+fi
+
+if [ ! -z ${GG_BUILD_METAL} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
+fi
+
 ## helpers
 
 # download a file if it does not exist or if it is outdated
@@ -81,8 +91,12 @@ function gg_run_ctest_debug {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Debug ..     ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                               ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time cmake -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} ..     ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time make -j                                              ) 2>&1 | tee -a $OUT/${ci}-make.log
+
+    if [ ! -z ${GG_BUILD_METAL} ]; then
+        export GGML_METAL_PATH_RESOURCES="$(pwd)/bin"
+    fi
 
     (time ctest --output-on-failure -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
@@ -109,8 +123,12 @@ function gg_run_ctest_release {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ..   ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                               ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} ..   ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time make -j                                              ) 2>&1 | tee -a $OUT/${ci}-make.log
+
+    if [ ! -z ${GG_BUILD_METAL} ]; then
+        export GGML_METAL_PATH_RESOURCES="$(pwd)/bin"
+    fi
 
     if [ -z $GG_BUILD_LOW_PERF ]; then
         (time ctest --output-on-failure ) 2>&1 | tee -a $OUT/${ci}-ctest.log
@@ -145,8 +163,11 @@ function gg_run_gpt_2 {
     model="../models-mnt/gpt-2/ggml-model-gpt-2-117M.bin"
     prompts="../examples/prompts/gpt-2.txt"
 
-    (time ./bin/gpt-2 --model ${model} -s 1234 -n 64 -tt ${prompts}                       ) 2>&1 | tee -a $OUT/${ci}-tg.log
-    (time ./bin/gpt-2 --model ${model} -s 1234 -n 64 -p "I believe the meaning of life is") 2>&1 | tee -a $OUT/${ci}-tg.log
+    (time ./bin/gpt-2-backend --model ${model} -s 1234 -n 64 -tt ${prompts}                       ) 2>&1 | tee -a $OUT/${ci}-tg.log
+    (time ./bin/gpt-2-backend --model ${model} -s 1234 -n 64 -p "I believe the meaning of life is") 2>&1 | tee -a $OUT/${ci}-tg.log
+    (time ./bin/gpt-2-sched   --model ${model} -s 1234 -n 64 -p "I believe the meaning of life is") 2>&1 | tee -a $OUT/${ci}-tg.log
+
+    (time ./bin/gpt-2-batched --model ${model} -s 1234 -n 64 -np 8 -p "I believe the meaning of life is") 2>&1 | tee -a $OUT/${ci}-tg.log
 
     set +e
 }
@@ -210,7 +231,9 @@ function gg_run_whisper {
     model_f16="${path_models}/ggml-base.en.bin"
     audio_0="${path_models}/jfk.wav"
 
-    (time ./bin/whisper -m ${model_f16} -f ${audio_0} 2>&1 | tee -a $OUT/${ci}-main.log) || true
+    (time ./bin/whisper -m ${model_f16} -f ${audio_0} ) 2>&1 | tee -a $OUT/${ci}-main.log
+
+    grep -q "And so my fellow Americans" $OUT/${ci}-main.log
 
     set +e
 }
@@ -225,43 +248,75 @@ function gg_sum_whisper {
     gg_printf '```\n'
 }
 
-# mpt
+# sam
 
-function gg_run_mpt {
+function gg_run_sam {
     cd ${SRC}
 
-    gg_wget models-mnt/mpt/7B/ https://huggingface.co/mosaicml/mpt-7b/raw/main/config.json
-    gg_wget models-mnt/mpt/7B/ https://huggingface.co/mosaicml/mpt-7b/raw/main/tokenizer.json
-    gg_wget models-mnt/mpt/7B/ https://huggingface.co/mosaicml/mpt-7b/raw/main/tokenizer_config.json
-    gg_wget models-mnt/mpt/7B/ https://huggingface.co/mosaicml/mpt-7b/raw/main/pytorch_model.bin.index.json
-    gg_wget models-mnt/mpt/7B/ https://huggingface.co/mosaicml/mpt-7b/raw/main/configuration_mpt.py
-    gg_wget models-mnt/mpt/7B/ https://huggingface.co/mosaicml/mpt-7b/resolve/main/pytorch_model-00001-of-00002.bin
-    gg_wget models-mnt/mpt/7B/ https://huggingface.co/mosaicml/mpt-7b/resolve/main/pytorch_model-00002-of-00002.bin
+    gg_wget models-mnt/sam/ https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+    gg_wget models-mnt/sam/ https://raw.githubusercontent.com/YavorGIvanov/sam.cpp/ceafb7467bff7ec98e0c4f952e58a9eb8fd0238b/img.jpg
 
     cd build-ci-release
 
     set -e
 
-    path_models="../models-mnt/mpt/7B"
+    path_models="../models-mnt/sam/"
     model_f16="${path_models}/ggml-model-f16.bin"
-    model_q4_0="${path_models}/ggml-model-q4_0.bin"
+    img_0="${path_models}/img.jpg"
 
-    python3 ../examples/mpt/convert-h5-to-ggml.py ${path_models} 1
-    ./bin/mpt-quantize ${model_f16} ${model_q4_0} q4_0
+    python3 ../examples/sam/convert-pth-to-ggml.py ${path_models}/sam_vit_b_01ec64.pth ${path_models}/ 1
 
-    (time ./bin/mpt --model ${model_f16}  -s 1234 -n 64 -p "I believe the meaning of life is") 2>&1 | tee -a $OUT/${ci}-tg.log
-    (time ./bin/mpt --model ${model_q4_0} -s 1234 -n 64 -p "I believe the meaning of life is") 2>&1 | tee -a $OUT/${ci}-tg.log
+    (time ./bin/sam -m ${model_f16} -i ${img_0} ) 2>&1 | tee -a $OUT/${ci}-main.log
+
+    grep -q "bbox (371, 436), (144, 168)" $OUT/${ci}-main.log
 
     set +e
 }
 
-function gg_sum_mpt {
+function gg_sum_sam {
     gg_printf '### %s\n\n' "${ci}"
 
-    gg_printf 'Runs short MPT text generation\n'
+    gg_printf 'Run SAM\n'
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-tg.log)"
+    gg_printf '%s\n' "$(cat $OUT/${ci}-main.log)"
+    gg_printf '```\n'
+}
+
+# yolo
+
+function gg_run_yolo {
+    cd ${SRC}
+
+    gg_wget models-mnt/yolo/ https://huggingface.co/ggml-org/models/resolve/main/yolo/yolov3-tiny.weights
+    gg_wget models-mnt/yolo/ https://huggingface.co/ggml-org/models/resolve/main/yolo/dog.jpg
+
+    cd build-ci-release
+    cp -r ../examples/yolo/data .
+
+    set -e
+
+    path_models="../models-mnt/yolo/"
+
+    python3 ../examples/yolo/convert-yolov3-tiny.py ${path_models}/yolov3-tiny.weights
+
+    (time ./bin/yolov3-tiny -m yolov3-tiny.gguf -i ${path_models}/dog.jpg ) 2>&1 | tee -a $OUT/${ci}-main.log
+
+    grep -q "dog: 57%" $OUT/${ci}-main.log
+    grep -q "car: 52%" $OUT/${ci}-main.log
+    grep -q "truck: 56%" $OUT/${ci}-main.log
+    grep -q "bicycle: 59%" $OUT/${ci}-main.log
+
+    set +e
+}
+
+function gg_sum_yolo {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Run YOLO\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}-main.log)"
     gg_printf '```\n'
 }
 
@@ -281,12 +336,22 @@ ret=0
 
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
+
+if [ ! -z ${GG_BUILD_METAL} ]; then
+    export GGML_METAL_PATH_RESOURCES="${SRC}/build-ci-release/bin"
+fi
+
 test $ret -eq 0 && gg_run gpt_2
 test $ret -eq 0 && gg_run mnist
 test $ret -eq 0 && gg_run whisper
+test $ret -eq 0 && gg_run sam
+test $ret -eq 0 && gg_run yolo
 
 if [ -z $GG_BUILD_LOW_PERF ]; then
-    test $ret -eq 0 && gg_run mpt
+    if [ -z ${GG_BUILD_VRAM_GB} ] || [ ${GG_BUILD_VRAM_GB} -ge 16 ]; then
+        # run tests that require GPU with at least 16GB of VRAM
+        date
+    fi
 fi
 
 exit $ret

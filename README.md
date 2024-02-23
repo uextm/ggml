@@ -25,27 +25,24 @@ Some of the development is currently happening in the [llama.cpp](https://github
 - [X] Example of GPT-2 inference [examples/gpt-2](https://github.com/ggerganov/ggml/tree/master/examples/gpt-2)
 - [X] Example of GPT-J inference [examples/gpt-j](https://github.com/ggerganov/ggml/tree/master/examples/gpt-j)
 - [X] Example of Whisper inference [examples/whisper](https://github.com/ggerganov/ggml/tree/master/examples/whisper)
-- [X] Support 4-bit integer quantization https://github.com/ggerganov/ggml/pull/27
-- [X] Example of Cerebras-GPT inference [examples/gpt-2](https://github.com/ggerganov/ggml/tree/master/examples/gpt-2)
-- [ ] Example of FLAN-T5 inference https://github.com/ggerganov/ggml/pull/12
 - [X] Example of LLaMA inference [ggerganov/llama.cpp](https://github.com/ggerganov/llama.cpp)
 - [X] Example of LLaMA training [ggerganov/llama.cpp/examples/baby-llama](https://github.com/ggerganov/llama.cpp/tree/master/examples/baby-llama)
 - [X] Example of Falcon inference [cmp-nct/ggllm.cpp](https://github.com/cmp-nct/ggllm.cpp)
 - [X] Example of BLOOM inference [NouamaneTazi/bloomz.cpp](https://github.com/NouamaneTazi/bloomz.cpp)
 - [X] Example of RWKV inference [saharNooby/rwkv.cpp](https://github.com/saharNooby/rwkv.cpp)
 - [X] Example of SAM inference [examples/sam](https://github.com/ggerganov/ggml/tree/master/examples/sam)
-- [X] Idea for GPU support: https://github.com/ggerganov/llama.cpp/discussions/915
-- [X] Example of StableLM (GPT-NeoX) inference [examples/gpt-neox](https://github.com/ggerganov/ggml/tree/master/examples/gpt-neox)
 - [X] Example of BERT inference [skeskinen/bert.cpp](https://github.com/skeskinen/bert.cpp)
-- [X] Example of 💫 StarCoder inference [examples/starcoder](https://github.com/ggerganov/ggml/tree/master/examples/starcoder)
-- [X] Example of MPT inference [examples/mpt](https://github.com/ggerganov/ggml/tree/master/examples/mpt)
-- [X] Example of Replit inference [examples/replit](https://github.com/ggerganov/ggml/tree/master/examples/replit)
 - [X] Example of BioGPT inference [PABannier/biogpt.cpp](https://github.com/PABannier/biogpt.cpp)
 - [X] Example of Encodec inference [PABannier/encodec.cpp](https://github.com/PABannier/encodec.cpp)
 - [X] Example of CLIP inference [monatis/clip.cpp](https://github.com/monatis/clip.cpp)
 - [X] Example of MiniGPT4 inference [Maknee/minigpt4.cpp](https://github.com/Maknee/minigpt4.cpp)
 - [X] Example of ChatGLM inference [li-plus/chatglm.cpp](https://github.com/li-plus/chatglm.cpp)
 - [X] Example of Stable Diffusion inference [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
+- [X] Example of Qwen inference [QwenLM/qwen.cpp](https://github.com/QwenLM/qwen.cpp)
+- [X] Example of YOLO inference [examples/yolo](https://github.com/ggerganov/ggml/tree/master/examples/yolo)
+- [X] Example of ViT inference [staghado/vit.cpp](https://github.com/staghado/vit.cpp)
+- [X] Example of multiple LLMs inference [foldl/chatllm.cpp](https://github.com/foldl/chatllm.cpp)
+- [X] SeamlessM4T inference *(in development)* https://github.com/facebookresearch/seamless_communication/tree/main/ggml
 
 ## Whisper inference (example)
 
@@ -73,11 +70,11 @@ git clone https://github.com/ggerganov/ggml
 cd ggml
 mkdir build && cd build
 cmake ..
-make -j4 gpt-2 gpt-j
+make -j4 gpt-2-backend gpt-j
 
 # Run the GPT-2 small 117M model
 ../examples/gpt-2/download-ggml-model.sh 117M
-./bin/gpt-2 -m models/gpt-2-117M/ggml-model.bin -p "This is an example"
+./bin/gpt-2-backend -m models/gpt-2-117M/ggml-model.bin -p "This is an example"
 
 # Run the GPT-J 6B model (requires 12GB disk space and 16GB CPU RAM)
 ../examples/gpt-j/download-ggml-model.sh 6B
@@ -130,6 +127,100 @@ cmake -DGGML_CUBLAS=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.1/bin/nvcc ..
 ```bash
 cmake -DGGML_CLBLAST=ON ..
 ```
+## Compiling for Android
+
+Download and unzip the NDK from this download [page](https://developer.android.com/ndk/downloads). Set the NDK_ROOT_PATH environment variable or provide the absolute path to the CMAKE_ANDROID_NDK in the command below.
+
+```bash
+cmake .. \
+   -DCMAKE_SYSTEM_NAME=Android \
+   -DCMAKE_SYSTEM_VERSION=33 \
+   -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+   -DCMAKE_ANDROID_NDK=$NDK_ROOT_PATH
+   -DCMAKE_ANDROID_STL_TYPE=c++_shared
+```
+
+```bash
+# Create directories
+adb shell 'mkdir /data/local/tmp/bin'
+adb shell 'mkdir /data/local/tmp/models'
+
+# Push the compiled binaries to the folder
+adb push bin/* /data/local/tmp/bin/
+
+# Push the ggml library
+adb push src/libggml.so /data/local/tmp/
+
+# Push model files
+adb push models/gpt-2-117M/ggml-model.bin /data/local/tmp/models/
+
+
+# Now lets do some inference ...
+adb shell
+
+# Now we are in shell
+cd /data/local/tmp
+export LD_LIBRARY_PATH=/data/local/tmp
+./bin/gpt-2-backend -m models/ggml-model.bin -p "this is an example"
+```
+
+### CLBlast for Android
+
+Build CLBlast.
+
+```bash
+# In CLBlast/build
+$ANDROID_SDK_PATH/cmake/3.22.1/bin/cmake .. \
+    -DCMAKE_SYSTEM_NAME=Android \
+    -DCMAKE_SYSTEM_VERSION=33 \
+    -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+    -DCMAKE_ANDROID_NDK=$ANDROID_NDK_PATH \
+    -DCMAKE_ANDROID_STL_TYPE=c++_static \
+    -DOPENCL_ROOT=$(readlink -f ../../OpenCL-Headers) \
+    -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+    -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+# Build libclblast.so
+make -j4
+```
+
+Pull `libGLES_mali.so` to `libOpenCL.so`.
+
+```bash
+# In ggml project root.
+mkdir arm64-v8a
+adb pull /system/vendor/lib64/egl/libGLES_mali.so arm64-v8a/libOpenCL.so
+```
+
+Build ggml with CLBlast.
+
+```bash
+# In ggml/build
+cd build
+$ANDROID_SDK_PATH/cmake/3.22.1/bin/cmake .. \
+    -DGGML_CLBLAST=ON \
+    -DCMAKE_SYSTEM_NAME=Android \
+    -DCMAKE_SYSTEM_VERSION=33 \
+    -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+    -DCMAKE_ANDROID_NDK=$ANDROID_NDK_PATH \
+    -DCMAKE_ANDROID_STL_TYPE=c++_shared \
+    -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+    -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+    -DCLBLAST_HOME=$(readlink -f ../../CLBlast) \
+    -DOPENCL_LIB=$(readlink -f ../arm64-v8a/libOpenCL.so)
+
+# Run make, adb push, etc.
+```
+
+Then in `adb shell`...
+
+```bash
+cd /data/local/tmp
+export LD_LIBRARY_PATH=/system/vendor/lib64/egl:/data/local/tmp
+./bin/gpt-2-backend -m models/ggml-model.bin -n 64 -p "Pepperoni pizza"
+```
+
+OpenCL does not have the same level of support in `ggml-backend` as CUDA or Metal. In the `gpt-2-backend` example, OpenCL will only be used for the matrix multiplications when evaluating large prompts.
 
 ## Resources
 
